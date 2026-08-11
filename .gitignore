@@ -1,0 +1,6 @@
+*.test
+/bin/
+
+# Example build outputs (go build in examples/*/)
+/examples/echo/echo
+/examples/stdlib/stdlib
