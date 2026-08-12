@@ -51,7 +51,7 @@ type ServerConfig struct {
 	MaxHeaderBytes       *int          `json:"max_header_bytes,omitempty" yaml:"max_header_bytes,omitempty" env:"MAX_HEADER_BYTES" flag:"http-max-header-bytes"`
 	ShutdownTimeoutSec   *float64      `json:"shutdown_timeout_sec,omitempty" yaml:"shutdown_timeout_sec,omitempty" env:"SHUTDOWN_TIMEOUT_SEC" flag:"http-shutdown-timeout-sec"`
 	MetricsEnabled       *bool         `json:"metrics_enabled,omitempty" yaml:"metrics_enabled,omitempty" env:"METRICS_ENABLED" flag:"http-metrics-enabled"`
-	KnobRestartPolicy    RestartPolicy `json:"knob_restart_policy,omitempty" yaml:"knob_restart_policy,omitempty" env:"KNOB_RESTART_POLICY" flag:"http-knob-restart-policy"`
+	RestartPolicy        RestartPolicy `json:"restart_policy,omitempty" yaml:"restart_policy,omitempty" env:"RESTART_POLICY" flag:"http-restart-policy"`
 }
 
 // Option configures a Server at construction time.
@@ -123,9 +123,9 @@ func WithMetricsEnabled(enabled bool) Option {
 	return func(o *options) { o.metricsEnabled = enabled }
 }
 
-// WithKnobRestartPolicy sets what happens when a live reload changes settings
+// WithRestartPolicy sets what happens when a live reload changes settings
 // that cannot rebind in place ("handled" default, or "immediate").
-func WithKnobRestartPolicy(policy string) Option {
+func WithRestartPolicy(policy string) Option {
 	return func(o *options) { o.restartPolicy = RestartPolicy(policy) }
 }
 
@@ -406,17 +406,17 @@ func (c *Server) Run(ctx context.Context) error {
 			return shutdownErr
 		}
 		if c.restartRequested.Load() {
-			return ErrServerKnobsRestart
+			return ErrServerRestartRequired
 		}
 		return serveErr
 	}
 }
 
-// ErrServerKnobsRestart is returned by Run when a live configuration reload
+// ErrServerRestartRequired is returned by Run when a live configuration reload
 // changed settings that cannot rebind in place and the active restart policy
 // was "immediate". Run has already drained and returned; the process should
 // exit so the orchestrator starts a fresh instance with the new settings.
-var ErrServerKnobsRestart = errors.New("cf_http: server settings changed; immediate restart requested")
+var ErrServerRestartRequired = errors.New("cf_http: server settings changed; immediate restart requested")
 
 // Health implements cf.HealthProvider.
 func (c *Server) Health(ctx context.Context) error {
@@ -508,7 +508,7 @@ func (c *Server) validateActiveSettings() error {
 	switch c.restartPolicy {
 	case "", RestartPolicyHandled, RestartPolicyImmediate:
 	default:
-		return errors.New("cf_http: unknown knob_restart_policy " + strconv.Quote(string(c.restartPolicy)))
+		return errors.New("cf_http: unknown restart_policy " + strconv.Quote(string(c.restartPolicy)))
 	}
 	return nil
 }

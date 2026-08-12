@@ -111,7 +111,7 @@ srv.SetHandler(mux)
   registers its own `Source[ServerConfig]` (config component required; bare
   frameworks absorb nothing). `EnvPrefix` defaults to `NAME_` and can be
   overridden with `WithSourceEnvPrefix`; `--<name>` overrides the config file
-  path; `--http-*` flags overlay individual knobs at process start.
+  path; `--http-*` flags overlay individual settings at process start.
 - `WithName` gives multiple named instances; resolve peers with `GetByName`.
 
 ## Health and readiness

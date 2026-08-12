@@ -118,8 +118,8 @@ func (c *Server) applyConfig(cfg ServerConfig) {
 	if cfg.MetricsEnabled != nil {
 		c.metricsEnabled = *cfg.MetricsEnabled
 	}
-	if cfg.KnobRestartPolicy != "" {
-		c.restartPolicy = cfg.KnobRestartPolicy
+	if cfg.RestartPolicy != "" {
+		c.restartPolicy = cfg.RestartPolicy
 	}
 }
 
@@ -147,9 +147,9 @@ func (c *Server) OnConfigReload(source string, cfg any) {
 	}
 
 	// Update restart policy if changed. The policy field itself is not a
-	// restart-required knob; it only selects how a settings change is handled.
-	if loaded.KnobRestartPolicy != "" {
-		c.restartPolicy = loaded.KnobRestartPolicy
+	// restart-required setting; it only selects how a settings change is handled.
+	if loaded.RestartPolicy != "" {
+		c.restartPolicy = loaded.RestartPolicy
 	}
 
 	if settingsChanged {
@@ -157,13 +157,13 @@ func (c *Server) OnConfigReload(source string, cfg any) {
 		case RestartPolicyImmediate:
 			// Grab the Run cancel func under the lock, then act outside it so
 			// the loud log and the cancel are never ordered with a stale lock.
-			// restartRequested makes Run return ErrServerKnobsRestart after it
+			// restartRequested makes Run return ErrServerRestartRequired after it
 			// drains, so the process exits and a fresh instance rebinds.
 			c.restartRequired.Store(true)
 			c.restartRequested.Store(true)
 			cancel := c.runCancel
 			c.mu.Unlock()
-			c.loggerValue().Error("cf_http: server settings changed; knob_restart_policy=immediate — gracefully stopping so the process exits and a fresh instance rebinds",
+			c.loggerValue().Error("cf_http: server settings changed; restart_policy=immediate — gracefully stopping so the process exits and a fresh instance rebinds",
 				"source", source,
 				"address", loaded.Address,
 			)
@@ -234,11 +234,11 @@ func validateServerConfig(cfg *ServerConfig) error {
 	if cfg.MaxHeaderBytes != nil && *cfg.MaxHeaderBytes <= 0 {
 		return errors.New("cf_http: max_header_bytes must be positive")
 	}
-	switch cfg.KnobRestartPolicy {
+	switch cfg.RestartPolicy {
 	case "", RestartPolicyHandled, RestartPolicyImmediate:
 	default:
-		return fmt.Errorf("cf_http: unknown knob_restart_policy %q (want %q or %q)",
-			cfg.KnobRestartPolicy, RestartPolicyHandled, RestartPolicyImmediate)
+		return fmt.Errorf("cf_http: unknown restart_policy %q (want %q or %q)",
+			cfg.RestartPolicy, RestartPolicyHandled, RestartPolicyImmediate)
 	}
 	return nil
 }

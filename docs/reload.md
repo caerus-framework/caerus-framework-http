@@ -12,19 +12,19 @@ the rest for a new process — it never re-binds the listener mid-flight.
   `idle_timeout_sec`, `read_header_timeout_sec`, `max_header_bytes`,
   `shutdown_timeout_sec`. The active listener stays on the old values until a
   new process binds them.
-- `knob_restart_policy` itself applies on the next reload; it only selects how
+- `restart_policy` itself applies on the next reload; it only selects how
   a settings change is handled.
 
-The server sets `http_server_restart_required=1` when a restart-required knob
+The server sets `http_server_restart_required=1` when a restart-required setting
 changed and logs at ERROR level. In both policies the change is **not** applied
 to the running listener.
 
-## knob_restart_policy
+## restart_policy
 
 ```json
 {
   "address": ":8080",
-  "knob_restart_policy": "handled"
+  "restart_policy": "handled"
 }
 ```
 
@@ -38,13 +38,13 @@ changed until you restart."**
 
 The server stops `Run` gracefully (drain + shutdown) so the process exits and
 systemd/k8s starts a fresh instance that binds the new settings. The library
-never calls `os.Exit` — `Run` returns `ErrServerKnobsRestart` and the framework
+never calls `os.Exit` — `Run` returns `ErrServerRestartRequired` and the framework
 finishes the shutdown.
 
 ```json
 {
   "address": ":8080",
-  "knob_restart_policy": "immediate"
+  "restart_policy": "immediate"
 }
 ```
 
@@ -55,7 +55,7 @@ Unknown policy values are rejected at config validation.
 Do not assume Caerus config reload is Viper-style "everything live." Reload
 reconnects and re-reads config; listening sockets are owned by the process and
 only a restart changes them. This is the **rotation plane** for credentials
-(External Secrets mounts) and the **restart plane** for server knobs.
+(External Secrets mounts) and the **restart plane** for server settings.
 
 ## Copy-paste: ops rollout
 
