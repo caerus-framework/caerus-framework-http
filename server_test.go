@@ -604,12 +604,12 @@ func TestRunImmediateRestartPolicy(t *testing.T) {
 	}
 
 	newAddress := "127.0.0.1:1"
-	cfg := &ServerConfig{Address: newAddress, KnobRestartPolicy: RestartPolicyImmediate}
+	cfg := &ServerConfig{Address: newAddress, RestartPolicy: RestartPolicyImmediate}
 	s.OnConfigReload("http", cfg)
 
 	err := <-errCh
-	if !errors.Is(err, ErrServerKnobsRestart) {
-		t.Fatalf("Run err = %v, want ErrServerKnobsRestart", err)
+	if !errors.Is(err, ErrServerRestartRequired) {
+		t.Fatalf("Run err = %v, want ErrServerRestartRequired", err)
 	}
 	if !s.restartRequested.Load() {
 		t.Fatal("restartRequested should be set after immediate reload")
