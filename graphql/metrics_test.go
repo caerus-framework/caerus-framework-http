@@ -18,7 +18,7 @@ import (
 
 func newTestServer(t *testing.T) *cf_http.Server {
 	t.Helper()
-	s := cf_http.New(cf_http.WithAddress(":0"))
+	s := cf_http.New(cf_http.WithBind(":0"))
 	if err := s.Init(context.Background(), nil); err != nil {
 		t.Fatalf("Init: %v", err)
 	}

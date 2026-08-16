@@ -23,7 +23,7 @@ to the running listener.
 
 ```json
 {
-  "address": ":8080",
+  "bind": ":8080",
   "restart_policy": "handled"
 }
 ```
@@ -43,7 +43,7 @@ finishes the shutdown.
 
 ```json
 {
-  "address": ":8080",
+  "bind": ":8080",
   "restart_policy": "immediate"
 }
 ```

@@ -94,8 +94,8 @@ func (c *Server) applyConfigFromSource() error {
 }
 
 func (c *Server) applyConfig(cfg ServerConfig) {
-	if cfg.Address != "" {
-		c.address = cfg.Address
+	if len(cfg.Bind) > 0 {
+		c.binds = append([]string{}, cfg.Bind...)
 	}
 	if cfg.ReadTimeoutSec != nil {
 		c.readTimeout = time.Duration(*cfg.ReadTimeoutSec * float64(time.Second))
@@ -165,7 +165,7 @@ func (c *Server) OnConfigReload(source string, cfg any) {
 			c.mu.Unlock()
 			c.loggerValue().Error("cf_http: server settings changed; restart_policy=immediate — gracefully stopping so the process exits and a fresh instance rebinds",
 				"source", source,
-				"address", loaded.Address,
+				"bind", loaded.Bind,
 			)
 			if cancel != nil {
 				cancel()
@@ -178,7 +178,7 @@ func (c *Server) OnConfigReload(source string, cfg any) {
 			c.restartRequired.Store(true)
 			c.loggerValue().Error("cf_http: server settings changed; restart required — NO LIVE REBIND: the current listener stays on the old settings until a NEW PROCESS rebinds (roll the Deployment / restart the process)",
 				"source", source,
-				"address", loaded.Address,
+				"bind", loaded.Bind,
 			)
 		}
 	}
@@ -189,7 +189,7 @@ func (c *Server) OnConfigReload(source string, cfg any) {
 }
 
 func serverSettingsChanged(c *Server, cfg *ServerConfig) bool {
-	if cfg.Address != "" && cfg.Address != c.address {
+	if len(cfg.Bind) > 0 && !bindsEqual(cfg.Bind, c.binds) {
 		return true
 	}
 	if cfg.ReadTimeoutSec != nil && time.Duration(*cfg.ReadTimeoutSec*float64(time.Second)) != c.readTimeout {
