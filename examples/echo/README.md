@@ -19,7 +19,7 @@ mkdir -p config
 # HTTP server config (logs/observability have their own core config files)
 cat > config/http.json <<EOF
 {
-  "address": ":8080",
+  "bind": ":8080",
   "read_timeout_sec": 10,
   "write_timeout_sec": 10,
   "idle_timeout_sec": 60
@@ -35,7 +35,7 @@ EOF
 
 cat > config/observability.json <<EOF
 {
-  "address": ":9090"
+  "bind": ":9090"
 }
 EOF
 

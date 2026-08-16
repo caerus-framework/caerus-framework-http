@@ -68,7 +68,7 @@ func (a *app) Shutdown(ctx context.Context) error { return nil }
 
 func main() {
 	httpServer := cf_http.New(
-		cf_http.WithAddress(":8080"),
+		cf_http.WithBind(":8080"),
 		cf_http.WithConfigSource("http", "config/http.json"),
 	)
 

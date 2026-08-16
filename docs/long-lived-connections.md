@@ -14,7 +14,7 @@ The `WriteTimeout` setting controls how long the server will wait for a response
 
 ```json
 {
-  "address": ":8080",
+  "bind": ":8080",
   "read_timeout_sec": 10,
   "write_timeout_sec": 0,
   "idle_timeout_sec": 60

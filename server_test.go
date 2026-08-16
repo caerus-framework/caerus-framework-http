@@ -80,8 +80,8 @@ func TestInitRequiresAddress(t *testing.T) {
 	}
 }
 
-func TestInitWithAddress(t *testing.T) {
-	s := New(WithAddress(":0"))
+func TestInitWithBind(t *testing.T) {
+	s := New(WithBind(":0"))
 	if err := s.Init(context.Background(), cf.New()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestInitWithAddress(t *testing.T) {
 }
 
 func TestInitTwiceIsIdempotent(t *testing.T) {
-	s := New(WithAddress(":0"))
+	s := New(WithBind(":0"))
 	if err := s.Init(context.Background(), cf.New()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestShutdownBeforeInit(t *testing.T) {
 }
 
 func TestRunBeforeInit(t *testing.T) {
-	s := New(WithAddress(":0"))
+	s := New(WithBind(":0"))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := s.Run(ctx); err == nil {
@@ -119,7 +119,7 @@ func TestRunBeforeInit(t *testing.T) {
 }
 
 func TestRunBeforeSetHandler(t *testing.T) {
-	s := New(WithAddress(":0"))
+	s := New(WithBind(":0"))
 	if err := s.Init(context.Background(), cf.New()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestRunBeforeSetHandler(t *testing.T) {
 }
 
 func TestRunAndShutdown(t *testing.T) {
-	s := New(WithAddress("127.0.0.1:0"))
+	s := New(WithBind("127.0.0.1:0"))
 	if err := s.Init(context.Background(), cf.New()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestRunAndShutdown(t *testing.T) {
 }
 
 func TestGracefulDrain(t *testing.T) {
-	s := New(WithAddress("127.0.0.1:0"), WithShutdownTimeout(2*time.Second))
+	s := New(WithBind("127.0.0.1:0"), WithShutdownTimeout(2*time.Second))
 	if err := s.Init(context.Background(), cf.New()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestGracefulDrain(t *testing.T) {
 
 func TestExplicitZeroWriteTimeout(t *testing.T) {
 	zero := 0.0
-	s := New(WithAddress(":0"), WithWriteTimeout(time.Duration(zero)))
+	s := New(WithBind(":0"), WithWriteTimeout(time.Duration(zero)))
 	if err := s.Init(context.Background(), cf.New()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestExplicitZeroWriteTimeout(t *testing.T) {
 func TestConfigWithExplicitZero(t *testing.T) {
 	zero := 0.0
 	cfg := ServerConfig{
-		Address:         ":0",
+		Bind:            Bind{":0"},
 		WriteTimeoutSec: &zero,
 	}
 	s := New(WithConfig(cfg))
@@ -260,7 +260,7 @@ func TestConfigWithExplicitZero(t *testing.T) {
 }
 
 func TestMetricsAfterInit(t *testing.T) {
-	s := New(WithAddress(":0"))
+	s := New(WithBind(":0"))
 	if err := s.Init(context.Background(), cf.New()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestMetricsAfterInit(t *testing.T) {
 }
 
 func TestMetricsDisabled(t *testing.T) {
-	s := New(WithAddress(":0"), WithMetricsEnabled(false))
+	s := New(WithBind(":0"), WithMetricsEnabled(false))
 	if err := s.Init(context.Background(), cf.New()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestMetricsDisabled(t *testing.T) {
 }
 
 func TestRecord(t *testing.T) {
-	s := New(WithAddress(":0"))
+	s := New(WithBind(":0"))
 	if err := s.Init(context.Background(), cf.New()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestRecordNilServer(t *testing.T) {
 }
 
 func TestRecordEmptyRoute(t *testing.T) {
-	s := New(WithAddress(":0"))
+	s := New(WithBind(":0"))
 	if err := s.Init(context.Background(), cf.New()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -394,7 +394,7 @@ func TestStatusClass(t *testing.T) {
 }
 
 func TestHealthAfterSetHandler(t *testing.T) {
-	s := New(WithAddress(":0"))
+	s := New(WithBind(":0"))
 	if err := s.Init(context.Background(), cf.New()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -409,7 +409,7 @@ func TestHealthAfterSetHandler(t *testing.T) {
 }
 
 func TestHealthAfterShutdown(t *testing.T) {
-	s := New(WithAddress(":0"))
+	s := New(WithBind(":0"))
 	if err := s.Init(context.Background(), cf.New()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -424,7 +424,7 @@ func TestHealthAfterShutdown(t *testing.T) {
 }
 
 func TestAddrBeforeRun(t *testing.T) {
-	s := New(WithAddress("127.0.0.1:8080"))
+	s := New(WithBind("127.0.0.1:8080"))
 	if err := s.Init(context.Background(), cf.New()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestAddrBeforeRun(t *testing.T) {
 }
 
 func TestAddrAfterRun(t *testing.T) {
-	s := New(WithAddress("127.0.0.1:0"))
+	s := New(WithBind("127.0.0.1:0"))
 	if err := s.Init(context.Background(), cf.New()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -463,13 +463,13 @@ func TestValidateServerConfig(t *testing.T) {
 	}{
 		{
 			name:    "valid",
-			cfg:     ServerConfig{Address: ":0"},
+			cfg:     ServerConfig{Bind: Bind{":0"}},
 			wantErr: false,
 		},
 		{
 			name: "negative timeout",
 			cfg: ServerConfig{
-				Address:        ":0",
+				Bind:           Bind{":0"},
 				ReadTimeoutSec: ptrFloat(-1),
 			},
 			wantErr: true,
@@ -477,7 +477,7 @@ func TestValidateServerConfig(t *testing.T) {
 		{
 			name: "zero shutdown timeout",
 			cfg: ServerConfig{
-				Address:            ":0",
+				Bind:               Bind{":0"},
 				ShutdownTimeoutSec: ptrFloat(0),
 			},
 			wantErr: true,
@@ -485,7 +485,7 @@ func TestValidateServerConfig(t *testing.T) {
 		{
 			name: "zero max header bytes",
 			cfg: ServerConfig{
-				Address:        ":0",
+				Bind:           Bind{":0"},
 				MaxHeaderBytes: ptrInt(0),
 			},
 			wantErr: true,
@@ -509,15 +509,15 @@ func TestApplyConfig(t *testing.T) {
 	writeTimeout := 0.0
 	metricsEnabled := false
 	cfg := ServerConfig{
-		Address:         ":8080",
+		Bind:            Bind{":8080"},
 		ReadTimeoutSec:  &readTimeout,
 		WriteTimeoutSec: &writeTimeout,
 		MetricsEnabled:  &metricsEnabled,
 	}
 	s := New()
 	s.applyConfig(cfg)
-	if s.address != ":8080" {
-		t.Fatalf("address = %q, want :8080", s.address)
+	if len(s.binds) != 1 || s.binds[0] != ":8080" {
+		t.Fatalf("bind = %q, want :8080", s.binds)
 	}
 	if s.readTimeout != 5*time.Second {
 		t.Fatalf("readTimeout = %v, want 5s", s.readTimeout)
@@ -534,7 +534,7 @@ func TestOnConfigReload(t *testing.T) {
 	fw := cf.New()
 	addComponent(t, fw, cf_logs.New())
 	addComponent(t, fw, cf_configuration.New())
-	s := New(WithAddress(":0"), WithConfigSource("http", ""))
+	s := New(WithBind(":0"), WithConfigSource("http", ""))
 	addComponent(t, fw, s)
 	if err := fw.Initialize(context.Background()); err != nil {
 		t.Fatalf("Initialize: %v", err)
@@ -556,7 +556,7 @@ func TestOnConfigReload(t *testing.T) {
 }
 
 func TestOnConfigReloadWrongSource(t *testing.T) {
-	s := New(WithAddress(":0"), WithConfigSource("http", "config/http.json"))
+	s := New(WithBind(":0"), WithConfigSource("http", "config/http.json"))
 	// Don't initialize - just test the reload logic
 	metricsEnabled := false
 	cfg := &ServerConfig{
@@ -573,7 +573,7 @@ func TestRunImmediateRestartPolicy(t *testing.T) {
 	fw := cf.New()
 	addComponent(t, fw, cf_logs.New())
 	addComponent(t, fw, cf_configuration.New())
-	s := New(WithAddress("127.0.0.1:0"), WithConfigSource("http", ""))
+	s := New(WithBind("127.0.0.1:0"), WithConfigSource("http", ""))
 	addComponent(t, fw, s)
 	if err := fw.Initialize(context.Background()); err != nil {
 		t.Fatalf("Initialize: %v", err)
@@ -604,7 +604,7 @@ func TestRunImmediateRestartPolicy(t *testing.T) {
 	}
 
 	newAddress := "127.0.0.1:1"
-	cfg := &ServerConfig{Address: newAddress, RestartPolicy: RestartPolicyImmediate}
+	cfg := &ServerConfig{Bind: Bind{newAddress}, RestartPolicy: RestartPolicyImmediate}
 	s.OnConfigReload("http", cfg)
 
 	err := <-errCh
@@ -638,7 +638,7 @@ func TestDependencies(t *testing.T) {
 }
 
 func TestConnState(t *testing.T) {
-	s := New(WithAddress("127.0.0.1:0"))
+	s := New(WithBind("127.0.0.1:0"))
 	if err := s.Init(context.Background(), cf.New()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}

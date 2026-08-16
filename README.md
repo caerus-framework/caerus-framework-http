@@ -77,7 +77,7 @@ For a one-off binary, add the component directly and resolve it with
 
 `WithConfigSource("http", "config/http.json")` self-registers the `http` source.
 The source uses the `HTTP_` environment prefix and the `--http` file-path flag.
-Address and server timeouts are restart-required; metrics enablement reloads
+Bind and server timeouts are restart-required; metrics enablement reloads
 live. `restart_policy` (`handled` default, or `immediate`) selects what happens
 when a restart-required setting changes on reload — see
 [`docs/reload.md`](docs/reload.md). TLS, PROXY protocol, and forwarded-header

@@ -275,7 +275,7 @@ func TestRecoverCommittedResponse(t *testing.T) {
 }
 
 func TestMetrics(t *testing.T) {
-	s := New(WithAddress(":0"))
+	s := New(WithBind(":0"))
 	if err := s.Init(context.Background(), nil); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestMetrics(t *testing.T) {
 }
 
 func TestMetricsUnknownRoute(t *testing.T) {
-	s := New(WithAddress(":0"))
+	s := New(WithBind(":0"))
 	if err := s.Init(context.Background(), nil); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestMetricsUnknownRoute(t *testing.T) {
 }
 
 func TestMetricsMultiplePathsSamePattern(t *testing.T) {
-	s := New(WithAddress(":0"))
+	s := New(WithBind(":0"))
 	if err := s.Init(context.Background(), nil); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestMetricsMultiplePathsSamePattern(t *testing.T) {
 }
 
 func TestMetricsInFlight(t *testing.T) {
-	s := New(WithAddress(":0"))
+	s := New(WithBind(":0"))
 	if err := s.Init(context.Background(), nil); err != nil {
 		t.Fatalf("Init: %v", err)
 	}

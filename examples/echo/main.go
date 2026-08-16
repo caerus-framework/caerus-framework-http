@@ -96,7 +96,7 @@ func echoMetrics(server *cf_http.Server) echo.MiddlewareFunc {
 
 func main() {
 	httpServer := cf_http.New(
-		cf_http.WithAddress(":8080"),
+		cf_http.WithBind(":8080"),
 		cf_http.WithConfigSource("http", "config/http.json"),
 	)
 

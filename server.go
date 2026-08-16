@@ -43,7 +43,7 @@ const (
 // ServerConfig is the file/env-drivable HTTP server configuration.
 // Pointer fields distinguish omitted values from explicit zero values.
 type ServerConfig struct {
-	Address              string        `json:"address,omitempty" yaml:"address,omitempty" env:"ADDRESS" flag:"http-address"`
+	Bind                 Bind          `json:"bind,omitempty" yaml:"bind,omitempty" env:"BIND" flag:"http-bind"`
 	ReadTimeoutSec       *float64      `json:"read_timeout_sec,omitempty" yaml:"read_timeout_sec,omitempty" env:"READ_TIMEOUT_SEC" flag:"http-read-timeout-sec"`
 	WriteTimeoutSec      *float64      `json:"write_timeout_sec,omitempty" yaml:"write_timeout_sec,omitempty" env:"WRITE_TIMEOUT_SEC" flag:"http-write-timeout-sec"`
 	IdleTimeoutSec       *float64      `json:"idle_timeout_sec,omitempty" yaml:"idle_timeout_sec,omitempty" env:"IDLE_TIMEOUT_SEC" flag:"http-idle-timeout-sec"`
@@ -64,7 +64,7 @@ type options struct {
 	srcEnvPrefix      string
 	srcFormat         cf_configuration.Format
 	srcFormatSet      bool
-	address           string
+	binds             []string
 	readTimeout       time.Duration
 	writeTimeout      time.Duration
 	idleTimeout       time.Duration
@@ -83,9 +83,9 @@ func WithConfig(cfg ServerConfig) Option {
 	return func(o *options) { o.loaded = &cfg }
 }
 
-// WithAddress sets the listen address.
-func WithAddress(address string) Option {
-	return func(o *options) { o.address = address }
+// WithBind sets one or more host:port listen addresses.
+func WithBind(addrs ...string) Option {
+	return func(o *options) { o.binds = append([]string{}, addrs...) }
 }
 
 // WithReadTimeout sets the maximum read duration.
@@ -152,7 +152,7 @@ type Server struct {
 	srcFormat    cf_configuration.Format
 	srcFormatSet bool
 
-	address           string
+	binds             []string
 	readTimeout       time.Duration
 	writeTimeout      time.Duration
 	idleTimeout       time.Duration
@@ -205,7 +205,7 @@ func New(opts ...Option) *Server {
 		srcEnvPrefix:      o.srcEnvPrefix,
 		srcFormat:         o.srcFormat,
 		srcFormatSet:      o.srcFormatSet,
-		address:           o.address,
+		binds:             append([]string{}, o.binds...),
 		readTimeout:       o.readTimeout,
 		writeTimeout:      o.writeTimeout,
 		idleTimeout:       o.idleTimeout,
@@ -286,7 +286,7 @@ func (c *Server) Init(ctx context.Context, fw *cf.CaerusFramework) error {
 	}
 	c.initialized = true
 	c.loggerValue().Info("cf_http: initialized",
-		"address", c.address,
+		"bind", c.binds,
 		"read_timeout", c.readTimeout,
 		"write_timeout", c.writeTimeout,
 		"idle_timeout", c.idleTimeout,
@@ -316,7 +316,10 @@ func (c *Server) Addr() string {
 	if c.boundAddress != "" {
 		return c.boundAddress
 	}
-	return c.address
+	if len(c.binds) == 0 {
+		return ""
+	}
+	return c.binds[0]
 }
 
 // Run implements cf.Runnable.
@@ -338,7 +341,7 @@ func (c *Server) Run(ctx context.Context) error {
 		return errors.New("cf_http: Run before SetHandler")
 	}
 	handler := c.handler
-	address := c.address
+	binds := append([]string{}, c.binds...)
 	readTimeout := c.readTimeout
 	writeTimeout := c.writeTimeout
 	idleTimeout := c.idleTimeout
@@ -363,8 +366,22 @@ func (c *Server) Run(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if len(binds) == 0 {
+		c.loggerValue().Error("cf_http: listen failed", "err", "bind is required")
+		return errors.New("cf_http: bind is required")
+	}
+	lns, err := listenAll(binds)
+	if err != nil {
+		c.loggerValue().Error("cf_http: listen failed", "bind", binds, "err", err)
+		return err
+	}
+	if err := runCtx.Err(); err != nil {
+		for _, ln := range lns {
+			_ = ln.Close()
+		}
+		return err
+	}
 	server := &http.Server{
-		Addr:              address,
 		Handler:           handler,
 		ReadTimeout:       readTimeout,
 		ReadHeaderTimeout: readHeaderTimeout,
@@ -374,29 +391,39 @@ func (c *Server) Run(ctx context.Context) error {
 		ErrorLog:          log.New(&frameworkLogWriter{server: c}, "", 0),
 		ConnState:         c.connState,
 	}
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		c.loggerValue().Error("cf_http: listen failed", "address", address, "err", err)
-		return err
-	}
-	if err := runCtx.Err(); err != nil {
-		_ = listener.Close()
-		return err
-	}
 	c.starts.Add(1)
 	c.mu.Lock()
-	c.boundAddress = listener.Addr().String()
+	c.boundAddress = pickBoundAddr(lns)
 	c.mu.Unlock()
-	errCh := make(chan error, 1)
-	go func() { errCh <- server.Serve(listener) }()
+	nServe := len(lns)
+	errCh := make(chan error, nServe)
+	for _, ln := range lns {
+		ln := ln
+		go func() { errCh <- server.Serve(ln) }()
+	}
+	drainServe := func(already int) error {
+		var last error
+		for i := already; i < nServe; i++ {
+			if e := normalizeServerError(<-errCh); e != nil {
+				last = e
+			}
+		}
+		return last
+	}
 
 	select {
 	case err := <-errCh:
-		return normalizeServerError(err)
+		first := normalizeServerError(err)
+		_ = server.Close()
+		rest := drainServe(1)
+		if first != nil {
+			return first
+		}
+		return rest
 	case <-runCtx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		shutdownErr := server.Shutdown(shutdownCtx)
-		serveErr := normalizeServerError(<-errCh)
+		serveErr := drainServe(0)
 		cancel()
 		if shutdownErr != nil {
 			if errors.Is(shutdownErr, context.DeadlineExceeded) || errors.Is(shutdownCtx.Err(), context.DeadlineExceeded) {
@@ -493,8 +520,8 @@ func (c *Server) connState(_ net.Conn, state http.ConnState) {
 }
 
 func (c *Server) validateActiveSettings() error {
-	if c.address == "" {
-		return errors.New("cf_http: address is required")
+	if len(c.binds) == 0 {
+		return errors.New("cf_http: bind is required")
 	}
 	if c.readTimeout < 0 || c.writeTimeout < 0 || c.idleTimeout < 0 || c.readHeaderTimeout < 0 {
 		return errors.New("cf_http: server timeouts must not be negative")

@@ -92,7 +92,7 @@ func (c *Server) Metrics() []cf_observability.Metric {
 	initialized := c.initialized
 	enabled := c.metricsEnabled
 	name := c.Name()
-	address := c.address
+	bind := strings.Join(c.binds, ",")
 	reloads := c.reloads.Load()
 	starts := c.starts.Load()
 	drainTimeouts := c.drainTimeouts.Load()
@@ -109,7 +109,7 @@ func (c *Server) Metrics() []cf_observability.Metric {
 			Name:   "http_info",
 			Help:   "HTTP server descriptor; 1 while initialized.",
 			Value:  1,
-			Labels: map[string]string{"component": name, "address": address},
+			Labels: map[string]string{"component": name, "bind": bind},
 		},
 		{
 			Name:   "http_requests_in_flight",
