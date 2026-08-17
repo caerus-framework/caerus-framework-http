@@ -9,6 +9,36 @@ import (
 	cf_http "github.com/caerus-framework/caerus-framework-http"
 )
 
+func TestErrorWriter(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	ErrorWriter(rec, req, cf_http.Failure{
+		Status:    http.StatusRequestEntityTooLarge,
+		Code:      cf_http.ErrorCodePayloadTooLarge,
+		Message:   "Request body too large",
+		RequestID: "req-9",
+	})
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+	if rec.Header().Get("Content-Type") != "application/problem+json" {
+		t.Fatalf("Content-Type = %q", rec.Header().Get("Content-Type"))
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if body["title"] != "Request body too large" {
+		t.Fatalf("title = %v", body["title"])
+	}
+	if body["code"] != cf_http.ErrorCodePayloadTooLarge {
+		t.Fatalf("code = %v", body["code"])
+	}
+	if body["request_id"] != "req-9" {
+		t.Fatalf("request_id = %v", body["request_id"])
+	}
+}
+
 func TestWrite(t *testing.T) {
 	p := New(http.StatusBadRequest, "Bad Request").
 		WithType("https://example.com/problems/bad-request").

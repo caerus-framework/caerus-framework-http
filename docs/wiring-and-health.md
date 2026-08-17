@@ -116,9 +116,12 @@ srv.SetHandler(mux)
 
 ## Health and readiness
 
-`cf_http.Server` implements `cf.HealthProvider`: `Health(ctx)` reports healthy
-only while initialized and a handler is set. The observability `/readyz` gate
-includes it, so a service that forgot `SetHandler` never reports ready.
+`cf_http.Server` implements `cf.HealthProvider`: `Health(ctx)` is healthy
+only while initialized, a handler is set, **and Run has a live listener**.
+Init plus `SetHandler` is not enough — that is the job path (no `Run`) and
+the window before bind. Observability `/readyz` includes this check, so
+Kubernetes stops sending traffic until the port is claimed, and again as
+soon as drain starts (readiness fails before in-flight requests finish).
 
 ## See also
 

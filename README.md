@@ -86,7 +86,7 @@ front of this component.
 
 ## Security middleware
 
-Optional `CORS`, `CSRF`, and `Compression` middleware live in this module.
+Optional `CORS`, `CSRF`, `SecurityHeaders`, and `Compression` middleware live in this module.
 They are opt-in and typed: you only get the behavior you configure.
 
 ### CORS: one rule, enforced at build time
@@ -124,16 +124,141 @@ cf_http.CORS(cf_http.CORSConfig{
 })
 ```
 
-### CSRF and compression
+### CSRF: pick one mode
 
-- **`CSRF(cfg)`** — double-submit cookie pattern with Origin/Referer checks.
-  Safe methods mint and set a cookie; unsafe methods are rejected (403) when
-  Origin and Referer are both missing, the token is missing, or the token does
-  not match. `Secure` defaults to true (HTTPS-only cookie). See
-  `docs/errors.md` to route rejections through an `ErrorWriter`.
+`CSRF(cfg)` is **opt-in**. Cookie-session apps need it; `Authorization: Bearer`
+APIs usually do not (the browser will not attach that header by itself).
+
+**Mode owns the whole product.** Empty `Mode` is `synchronizer`. Do not set
+HttpOnly yourself — there is no HttpOnly field.
+
+| `Mode` | Who it is for | Cookie | Unsafe POST must also send |
+|---|---|---|---|
+| **`synchronizer`** (default) | HTML forms, or an SPA that copies a token the **server** put in HTML/JSON/a GET header | HttpOnly (JS cannot read it) | Origin/Referer **and** header or form field matching the cookie |
+| **`double_submit`** | SPA that reads `document.cookie` into `X-CSRF-Token` | **not** HttpOnly | Origin/Referer **and** matching header/form |
+| **`origin_only`** | You only want the Origin belt (strict Ingress, no token UX) | none | Origin/Referer **only** |
+
+All three **fail closed** when an unsafe method has neither `Origin` nor
+`Referer`. Origin is compared to `r.Host` — sit behind an edge that owns
+Host.
+
+```text
+Wrong: “HttpOnly cookie, SPA copies it into the header.”
+Right: synchronizer + echo the token from CSRFTokenFrom / ExposeTokenHeader,
+       or double_submit (readable cookie). Those are different modes.
+```
+
+Call `CSRFConfig.Validate()` in `Init` and return the error (unknown Mode,
+`ExposeTokenHeader` with `origin_only`, or a TrustedHosts entry that looks
+like a URL). `CSRF(cfg)` panics on the same errors because it returns only
+`Middleware`:
+
+```go
+cfg := cf_http.CSRFConfig{
+    Mode:         cf_http.CSRFSynchronizer,
+    TrustedHosts: []string{"api.example.com"},
+}
+if err := cfg.Validate(); err != nil {
+    return err // framework Init path
+}
+csrf := cf_http.CSRF(cfg) // panics if Validate was skipped on a bad combo
+```
+
+**Origin vs Host.** Empty `TrustedHosts` compares Origin/Referer to `r.Host`.
+That is safe only behind an edge that **sets** Host (Ingress). A client can
+otherwise send `Host: evil.example` and `Origin: https://evil.example` and
+they match. Non-empty `TrustedHosts` is the allowlist: Origin host must be
+in that list (`host` or `host:port`, no scheme); `r.Host` is ignored.
+
+```text
+Wrong: CSRF on a raw socket with empty TrustedHosts, trusting r.Host.
+Right: TrustedHosts: []string{"api.example.com"} when nothing rewrites Host.
+```
+
+**Synchronizer — two ways to give the page the token** (construct options; default
+is app echo only):
+
+**App echo (`CSRFTokenFrom`)** — always available in `synchronizer` /
+`double_submit`. On the GET that mints the cookie, the handler can read the
+token (context, not `document.cookie`) and put it in HTML or JSON:
+
+```go
+mux.HandleFunc("/form", func(w http.ResponseWriter, r *http.Request) {
+    token := cf_http.CSRFTokenFrom(r)
+    fmt.Fprintf(w, `<input type="hidden" name="csrf_token" value="%s">`, token)
+})
+```
+
+**Response header (`ExposeTokenHeader: true`)** — middleware sets
+`X-CSRF-Token` on **GET and HEAD** (not OPTIONS, so CORS preflights do not
+see it). A same-origin SPA reads `response.headers.get("X-CSRF-Token")`.
+Default **false**. Wrap the **API mux only**. Do not put this in front of a
+CDN-cached public GET (the header is a secret; a shared cache can leak it).
+Cross-origin fetch also needs CORS `Access-Control-Expose-Headers`.
+
+```go
+cf_http.CSRF(cf_http.CSRFConfig{}) // synchronizer, app echoes via CSRFTokenFrom
+cf_http.CSRF(cf_http.CSRFConfig{ExposeTokenHeader: true}) // same mode, GET header too
+cf_http.CSRF(cf_http.CSRFConfig{Mode: cf_http.CSRFDoubleSubmit})
+cf_http.CSRF(cf_http.CSRFConfig{Mode: cf_http.CSRFOriginOnly})
+```
+
+HTML forms may send `csrf_token` instead of the header (`FormField`, default
+`csrf_token`). JSON bodies are not parsed as forms. `Secure` defaults to true
+(HTTPS-only cookie). See `docs/errors.md` to route rejections through an
+`ErrorWriter`.
+
+XSS on your own origin can still call your API as the user. Keep the
+**session** cookie HttpOnly regardless of CSRF mode.
+
+### Security headers
+
+Optional `SecurityHeaders(cfg)` sets `X-Content-Type-Options: nosniff` by
+default (set `NoSniff: false` to skip). HSTS is **off** until `HSTSMaxAge`
+is a positive number of seconds — do not turn it on for a plain-HTTP laptop
+listener. Prefer `SecurityHeadersConfig.Validate()` in `Init` (negative
+max-age); `SecurityHeaders(cfg)` panics on the same error.
+
+```go
+cf_http.SecurityHeaders(cf_http.SecurityHeadersConfig{
+    HSTSMaxAge:            31536000, // one year
+    HSTSIncludeSubdomains: true,
+})
+```
+
+The edge can still send these. This helper is for apps that terminate TLS
+in-process or want nosniff without waiting on Ingress.
+
+### Compression
+
 - **`Compression(cfg)`** — gzip responses above `MinSize` for clients that
-  accept gzip. Never compresses `text/event-stream` (SSE stays live) and
-  forwards WebSocket hijacks untouched.
+  accept gzip. Only JSON, HTML, and other `text/*` (not SSE). Images and
+  `octet-stream` pass through. `WriteHeader` is delayed until the body is
+  large enough so `Content-Encoding` is not applied too late. WebSocket
+  hijacks stay untouched.
+  **BREACH:** gzip can leak secrets if the same response mixes a secret
+  (CSRF token, session fragment) with attacker-controlled text (a search
+  query reflected in HTML). Do not compress those pages; keep secrets off
+  gzip’d HTML/JSON that includes user input.
+- **`RequestLog(get)`** — access line with method, route, status, duration,
+  request ID, and **partial** `client_ip` (IPv4 `/24`, IPv6 `/48` via
+  `cf_logs.ClientIP`). `RequestLogWith` sets `omit` / `full` or a getter
+  for an identity the **app** already trusts. This module never reads
+  `X-Forwarded-For`. Query, body, and cookies stay off.
+- **`MaxBodyBytes(n, write)`** — opt-in 413 when the request body is larger
+  than `n` bytes (`n <= 0` is a no-op). Not on the Server by default: a global
+  limit would break uploads and large GraphQL variables. Wrap JSON POST
+  routes (auth-api JSON POSTs should); leave multipart upload routes off or
+  on a much larger `n`. Rejections go through `ErrorWriter` (nil =
+  `DefaultErrorWriter`); use the same writer as Recover / CSRF, or
+  `problem.Write`. Handlers that read the body themselves can call
+  `IsBodyTooLarge(err)` after `Read` / `Decode`.
+
+```text
+Wrong: Chain(..., MaxBodyBytes(1<<20, nil))(mux) when mux also serves
+       multipart uploads.
+Right: jsonMux := MaxBodyBytes(1<<20, nil)(jsonRoutes)
+```
 
 ## Telemetry
 

@@ -166,6 +166,7 @@ type Server struct {
 	runCancel         context.CancelFunc
 	initialized       bool
 	running           bool
+	listening         atomic.Bool
 	boundAddress      string
 	loggerSet         bool
 	logger            atomic.Pointer[slog.Logger]
@@ -356,6 +357,7 @@ func (c *Server) Run(ctx context.Context) error {
 	c.mu.Unlock()
 	defer func() {
 		runCancel()
+		c.listening.Store(false)
 		c.mu.Lock()
 		c.running = false
 		c.runCancel = nil
@@ -395,6 +397,7 @@ func (c *Server) Run(ctx context.Context) error {
 	c.mu.Lock()
 	c.boundAddress = pickBoundAddr(lns)
 	c.mu.Unlock()
+	c.listening.Store(true)
 	nServe := len(lns)
 	errCh := make(chan error, nServe)
 	for _, ln := range lns {
@@ -421,6 +424,7 @@ func (c *Server) Run(ctx context.Context) error {
 		}
 		return rest
 	case <-runCtx.Done():
+		c.listening.Store(false)
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		shutdownErr := server.Shutdown(shutdownCtx)
 		serveErr := drainServe(0)
@@ -445,7 +449,9 @@ func (c *Server) Run(ctx context.Context) error {
 // exit so the orchestrator starts a fresh instance with the new settings.
 var ErrServerRestartRequired = errors.New("cf_http: server settings changed; immediate restart requested")
 
-// Health implements cf.HealthProvider.
+// Health implements cf.HealthProvider. Ready only after Init, SetHandler, and
+// a successful listen in Run. Fails again when drain starts so /readyz stops
+// traffic before Shutdown waits on in-flight requests.
 func (c *Server) Health(ctx context.Context) error {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
@@ -459,6 +465,9 @@ func (c *Server) Health(ctx context.Context) error {
 	}
 	if c.handler == nil {
 		return errors.New("cf_http: handler is not registered")
+	}
+	if !c.listening.Load() {
+		return errors.New("cf_http: server is not listening")
 	}
 	return nil
 }

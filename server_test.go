@@ -394,7 +394,7 @@ func TestStatusClass(t *testing.T) {
 }
 
 func TestHealthAfterSetHandler(t *testing.T) {
-	s := New(WithBind(":0"))
+	s := New(WithBind("127.0.0.1:0"))
 	if err := s.Init(context.Background(), cf.New()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -403,9 +403,43 @@ func TestHealthAfterSetHandler(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
 	s.SetHandler(handler)
 
-	if err := s.Health(context.Background()); err != nil {
-		t.Fatalf("Health after SetHandler: %v", err)
+	if err := s.Health(context.Background()); err == nil {
+		t.Fatal("Health after SetHandler should fail until Run is listening")
 	}
+}
+
+func TestHealthWhileListening(t *testing.T) {
+	s := New(WithBind("127.0.0.1:0"))
+	if err := s.Init(context.Background(), cf.New()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
+	s.SetHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- s.Run(ctx) }()
+	waitListening(t, s)
+	if err := s.Health(context.Background()); err != nil {
+		t.Fatalf("Health while listening: %v", err)
+	}
+	cancel()
+	<-errCh
+	if err := s.Health(context.Background()); err == nil {
+		t.Fatal("Health after Run returns should fail")
+	}
+}
+
+func waitListening(t *testing.T, s *Server) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := s.Health(context.Background()); err == nil {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("server not listening")
 }
 
 func TestHealthAfterShutdown(t *testing.T) {

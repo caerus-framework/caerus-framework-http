@@ -76,6 +76,9 @@ const (
 
 	// ErrorCodeValidation indicates validation errors.
 	ErrorCodeValidation = "VALIDATION_ERROR"
+
+	// ErrorCodePayloadTooLarge indicates the request body exceeded MaxBodyBytes.
+	ErrorCodePayloadTooLarge = "PAYLOAD_TOO_LARGE"
 )
 
 // BadRequest creates a Failure for HTTP 400 Bad Request.
@@ -111,4 +114,9 @@ func InternalError(code, message string) Failure {
 // ValidationError creates a Failure for HTTP 422 Unprocessable Entity.
 func ValidationError(code, message string) Failure {
 	return NewFailure(http.StatusUnprocessableEntity, code, message)
+}
+
+// PayloadTooLarge creates a Failure for HTTP 413 Content Too Large.
+func PayloadTooLarge(code, message string) Failure {
+	return NewFailure(http.StatusRequestEntityTooLarge, code, message)
 }
