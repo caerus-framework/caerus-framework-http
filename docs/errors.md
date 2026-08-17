@@ -66,8 +66,27 @@ func myErrorWriter(w http.ResponseWriter, r *http.Request, failure cf_http.Failu
 handler := cf_http.Recover(logger, myErrorWriter)
 ```
 
+REST APIs can pass `problem.ErrorWriter` instead of copying JSON:
+
+```go
+import "github.com/caerus-framework/caerus-framework-http/problem"
+
+cf_http.Recover(getLogger, problem.ErrorWriter)
+cf_http.MaxBodyBytes(1<<20, problem.ErrorWriter)
+```
+
 The same `Write` option is accepted by the other middlewares that can reject a
-request, e.g. `CSRF(cf_http.CSRFConfig{Write: myErrorWriter})`.
+request, e.g. `CSRF(cf_http.CSRFConfig{Write: myErrorWriter})` and
+`MaxBodyBytes(1<<20, myErrorWriter)`. CSRF `Mode` still decides cookie flags
+and which checks run; `Write` only changes the 403 body.
+
+`MaxBodyBytes` is **off** unless you wrap a handler with a positive `n`.
+Content-Length larger than `n` is 413 before the inner handler runs. A
+body that exceeds `n` while being read (chunked, or a lying Content-Length)
+is wrapped with `http.MaxBytesReader`; if the handler does not write a
+response, the middleware writes 413. Status **413**, code
+`PAYLOAD_TOO_LARGE`, message `Request body too large`, plus `Connection:
+close`. Do not put this on a mux that also serves file uploads.
 
 ## Problem Details (RFC 9457)
 
@@ -195,10 +214,17 @@ cf_http.Recover(getLogger, nil)
 
 ### Request logging
 
-`RequestLog` logs requests with status codes:
+`RequestLog` logs requests with status codes and a **partial**
+`client_ip` (IPv4 `/24`, IPv6 `/48`). Query, body, and cookies are never
+logged. The module does not read `X-Forwarded-For`; use
+`RequestLogWith` if you must omit the address, log it in full, or pass
+a getter for an identity the **app** already trusts.
 
 ```go
+import cf_logs "github.com/caerus-framework/caerus-framework-logs"
+
 cf_http.RequestLog(getLogger)
+cf_http.RequestLogWith(getLogger, cf_http.RequestLogConfig{IP: cf_logs.IPOmit})
 ```
 
 - 2xx/3xx: INFO level

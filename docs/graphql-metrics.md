@@ -33,8 +33,10 @@ What we deliberately do **not** promise:
   content types) — those skip extraction.
 - Cardinality safety if you enable `AllOperations()` — that is a separate,
   documented footgun.
-- That the GraphQL **handler** itself is DoS-proof — body limits there and at
-  the proxy still matter; this doc is only about **metrics extraction** cost.
+- That the GraphQL **handler** itself is DoS-proof — put `MaxBodyBytes` on
+  the GraphQL POST route (or a proxy limit) separately; this doc is only
+  about **metrics extraction** cost. Peek window and body limit are not
+  the same setting.
 
 Practical recommendation: keep the default peek, put `operationName` first in
 client payloads (or set it in context), use `OnlyOperations`, and reserve

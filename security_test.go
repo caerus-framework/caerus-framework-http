@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -354,6 +355,258 @@ func TestCSRFCookieAttributes(t *testing.T) {
 	}
 }
 
+func TestCSRFDoubleSubmitCookieNotHttpOnly(t *testing.T) {
+	handler := CSRF(CSRFConfig{Mode: CSRFDoubleSubmit})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	var csrfCookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "_csrf" {
+			csrfCookie = c
+			break
+		}
+	}
+	if csrfCookie == nil {
+		t.Fatal("CSRF cookie should be set")
+	}
+	if csrfCookie.HttpOnly {
+		t.Fatal("double_submit cookie must be readable by JavaScript")
+	}
+}
+
+func TestCSRFOriginOnlySkipsToken(t *testing.T) {
+	handler := CSRF(CSRFConfig{Mode: CSRFOriginOnly})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "_csrf" {
+			t.Fatal("origin_only must not mint a CSRF cookie")
+		}
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Header.Set("Origin", "https://"+req.Host)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (origin only, no token)", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 without Origin", rec.Code)
+	}
+}
+
+func TestCSRFTokenFromOnMintingGET(t *testing.T) {
+	var got string
+	handler := CSRF(CSRFConfig{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = CSRFTokenFrom(r)
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	var cookieVal string
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "_csrf" {
+			cookieVal = c.Value
+			break
+		}
+	}
+	if cookieVal == "" {
+		t.Fatal("cookie should be set")
+	}
+	if got != cookieVal {
+		t.Fatalf("CSRFTokenFrom = %q, want cookie %q", got, cookieVal)
+	}
+}
+
+func TestCSRFExposeTokenHeader(t *testing.T) {
+	handler := CSRF(CSRFConfig{ExposeTokenHeader: true})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	token := rec.Header().Get("X-CSRF-Token")
+	if token == "" {
+		t.Fatal("GET should expose the token header")
+	}
+	var cookieVal string
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "_csrf" {
+			cookieVal = c.Value
+			break
+		}
+	}
+	if token != cookieVal {
+		t.Fatalf("header %q != cookie %q", token, cookieVal)
+	}
+
+	req = httptest.NewRequest(http.MethodOptions, "/", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Header().Get("X-CSRF-Token") != "" {
+		t.Fatal("OPTIONS must not expose the token (CORS preflight)")
+	}
+}
+
+func TestCSRFFormField(t *testing.T) {
+	handler := CSRF(CSRFConfig{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("csrf_token=token123"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(&http.Cookie{Name: "_csrf", Value: "token123"})
+	req.Header.Set("Origin", "https://"+req.Host)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+}
+
+func TestCSRFJSONBodyDoesNotCountAsForm(t *testing.T) {
+	handler := CSRF(CSRFConfig{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"csrf_token":"token123"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "_csrf", Value: "token123"})
+	req.Header.Set("Origin", "https://"+req.Host)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (JSON is not a form field)", rec.Code)
+	}
+}
+
+func TestCSRFValidate(t *testing.T) {
+	if err := (CSRFConfig{}).Validate(); err != nil {
+		t.Fatalf("empty config: %v", err)
+	}
+	if err := (CSRFConfig{Mode: CSRFOriginOnly, ExposeTokenHeader: true}).Validate(); err != ErrCSRFExposeTokenOriginOnly {
+		t.Fatalf("got %v, want ErrCSRFExposeTokenOriginOnly", err)
+	}
+	if err := (CSRFConfig{Mode: "nope"}).Validate(); !errors.Is(err, ErrCSRFUnknownMode) {
+		t.Fatalf("got %v, want ErrCSRFUnknownMode", err)
+	}
+	if err := (CSRFConfig{TrustedHosts: []string{"https://example.com"}}).Validate(); !errors.Is(err, ErrCSRFInvalidTrustedHost) {
+		t.Fatalf("got %v, want ErrCSRFInvalidTrustedHost", err)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("CSRF should panic on unknown Mode")
+		}
+	}()
+	_ = CSRF(CSRFConfig{Mode: "nope"})
+}
+
+func TestCSRFTrustedHostsRejectsSpoofedHost(t *testing.T) {
+	handler := CSRF(CSRFConfig{TrustedHosts: []string{"api.example.com"}})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Host = "evil.example"
+	req.Header.Set("Origin", "https://evil.example")
+	req.AddCookie(&http.Cookie{Name: "_csrf", Value: "token123"})
+	req.Header.Set("X-CSRF-Token", "token123")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (Origin host not in allowlist)", rec.Code)
+	}
+}
+
+func TestCSRFTrustedHostsIgnoresRequestHost(t *testing.T) {
+	handler := CSRF(CSRFConfig{TrustedHosts: []string{"api.example.com"}})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Host = "evil.example"
+	req.Header.Set("Origin", "https://api.example.com")
+	req.AddCookie(&http.Cookie{Name: "_csrf", Value: "token123"})
+	req.Header.Set("X-CSRF-Token", "token123")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (Origin host is on the allowlist)", rec.Code)
+	}
+}
+
+func TestCSRFDefaultOriginTrustsRequestHost(t *testing.T) {
+	handler := CSRF(CSRFConfig{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Host = "evil.example"
+	req.Header.Set("Origin", "https://evil.example")
+	req.AddCookie(&http.Cookie{Name: "_csrf", Value: "token123"})
+	req.Header.Set("X-CSRF-Token", "token123")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (empty TrustedHosts compares Origin to r.Host)", rec.Code)
+	}
+}
+
+func TestSecurityHeadersDefaultNoSniff(t *testing.T) {
+	handler := SecurityHeaders(SecurityHeadersConfig{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("nosniff = %q", rec.Header().Get("X-Content-Type-Options"))
+	}
+	if rec.Header().Get("Strict-Transport-Security") != "" {
+		t.Fatal("HSTS must be omitted when HSTSMaxAge is 0")
+	}
+}
+
+func TestSecurityHeadersHSTS(t *testing.T) {
+	handler := SecurityHeaders(SecurityHeadersConfig{
+		HSTSMaxAge:            31536000,
+		HSTSIncludeSubdomains: true,
+		HSTSPreload:           true,
+	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	got := rec.Header().Get("Strict-Transport-Security")
+	want := "max-age=31536000; includeSubDomains; preload"
+	if got != want {
+		t.Fatalf("HSTS = %q, want %q", got, want)
+	}
+}
+
+func TestSecurityHeadersNoSniffOff(t *testing.T) {
+	off := false
+	handler := SecurityHeaders(SecurityHeadersConfig{NoSniff: &off})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Header().Get("X-Content-Type-Options") != "" {
+		t.Fatalf("nosniff should be off, got %q", rec.Header().Get("X-Content-Type-Options"))
+	}
+}
+
 func TestCompression(t *testing.T) {
 	cfg := CompressionConfig{
 		MinSize: 10,
@@ -461,6 +714,43 @@ func TestCompressionSkipsSSEWithCharsetAndFlush(t *testing.T) {
 	want := string(chunk1) + string(chunk2)
 	if rec.Body.String() != want {
 		t.Fatalf("body = %q, want %q", rec.Body.String(), want)
+	}
+}
+
+func TestCompressionWriteHeaderThenBody(t *testing.T) {
+	payload := strings.Repeat("n", 64)
+	handler := Compression(CompressionConfig{MinSize: 10})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(payload))
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", rec.Code)
+	}
+	if rec.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip", rec.Header().Get("Content-Encoding"))
+	}
+}
+
+func TestCompressionSkipsOctetStream(t *testing.T) {
+	payload := strings.Repeat("b", 64)
+	handler := Compression(CompressionConfig{MinSize: 10})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write([]byte(payload))
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("binary types must not gzip, got %q", rec.Header().Get("Content-Encoding"))
+	}
+	if rec.Body.String() != payload {
+		t.Fatalf("body must pass through uncompressed")
 	}
 }
 

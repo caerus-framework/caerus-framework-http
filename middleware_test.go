@@ -2,12 +2,15 @@ package cf_http
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	cf_logs "github.com/caerus-framework/caerus-framework-logs"
 )
 
 func TestChain(t *testing.T) {
@@ -161,6 +164,84 @@ func TestRequestLog(t *testing.T) {
 
 	if !logged {
 		t.Fatal("request should be logged")
+	}
+}
+
+func TestRequestLogPartialClientIP(t *testing.T) {
+	var line string
+	logger := func() *slog.Logger {
+		return slog.New(slog.NewTextHandler(&testWriter{fn: func(s string) { line = s }}, nil))
+	}
+	h := RequestLog(logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.1.2.3:9999"
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if !strings.Contains(line, "client_ip=10.1.2.0") {
+		t.Fatalf("want coarsened IPv4, got %q", line)
+	}
+	if strings.Contains(line, "10.1.2.3") {
+		t.Fatalf("full IPv4 must not appear: %q", line)
+	}
+}
+
+func TestRequestLogIPv6Partial(t *testing.T) {
+	var line string
+	logger := func() *slog.Logger {
+		return slog.New(slog.NewTextHandler(&testWriter{fn: func(s string) { line = s }}, nil))
+	}
+	h := RequestLog(logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "[2001:db8:abcd:1234::1]:443"
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if !strings.Contains(line, "client_ip=2001:db8:abcd::") {
+		t.Fatalf("want IPv6 /48, got %q", line)
+	}
+	if strings.Contains(line, "1234") {
+		t.Fatalf("bits below /48 must not appear: %q", line)
+	}
+}
+
+func TestRequestLogOmit(t *testing.T) {
+	var line string
+	logger := func() *slog.Logger {
+		return slog.New(slog.NewTextHandler(&testWriter{fn: func(s string) { line = s }}, nil))
+	}
+	h := RequestLogWith(logger, RequestLogConfig{IP: cf_logs.IPOmit})(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.1.2.3:9"
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if strings.Contains(line, "client_ip") {
+		t.Fatalf("omit must skip the key: %q", line)
+	}
+}
+
+func TestRequestLogCustomIdentity(t *testing.T) {
+	var line string
+	logger := func() *slog.Logger {
+		return slog.New(slog.NewTextHandler(&testWriter{fn: func(s string) { line = s }}, nil))
+	}
+	h := RequestLogWith(logger, RequestLogConfig{
+		IP:       cf_logs.IPFull,
+		ClientIP: func(*http.Request) string { return "203.0.113.9:1" },
+	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.1.2.3:9"
+	req.Header.Set("X-Forwarded-For", "8.8.8.8")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if !strings.Contains(line, "client_ip=203.0.113.9") {
+		t.Fatalf("want getter identity, got %q", line)
+	}
+	if strings.Contains(line, "8.8.8.8") || strings.Contains(line, "10.1.2.3") {
+		t.Fatalf("must not parse XFF or use RemoteAddr when getter set: %q", line)
 	}
 }
 
@@ -391,6 +472,138 @@ func TestMetricsInFlight(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	if s.meter.inFlight.Load() != 0 {
 		t.Fatalf("inFlight = %d, want 0", s.meter.inFlight.Load())
+	}
+}
+
+func TestMaxBodyBytesOff(t *testing.T) {
+	called := false
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if len(b) != 32 {
+			t.Fatalf("len = %d, want 32", len(b))
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	for _, n := range []int64{0, -1} {
+		called = false
+		h := MaxBodyBytes(n, nil)(inner)
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(strings.Repeat("a", 32)))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if !called || rec.Code != http.StatusOK {
+			t.Fatalf("n=%d: called=%v status=%d", n, called, rec.Code)
+		}
+	}
+}
+
+func TestMaxBodyBytesContentLengthRejected(t *testing.T) {
+	called := false
+	h := MaxBodyBytes(10, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(strings.Repeat("a", 11)))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if called {
+		t.Fatal("handler must not run when Content-Length exceeds the limit")
+	}
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+	if rec.Header().Get("Connection") != "close" {
+		t.Fatalf("Connection = %q, want close", rec.Header().Get("Connection"))
+	}
+	if !strings.Contains(rec.Body.String(), "Request body too large") {
+		t.Fatalf("body = %q", rec.Body.String())
+	}
+}
+
+func TestMaxBodyBytesExactLimitOK(t *testing.T) {
+	h := MaxBodyBytes(10, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if len(b) != 10 {
+			t.Fatalf("len = %d, want 10", len(b))
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(strings.Repeat("a", 10)))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+}
+
+func TestMaxBodyBytesUnknownLength(t *testing.T) {
+	h := MaxBodyBytes(10, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := io.ReadAll(r.Body)
+		if err != nil && !IsBodyTooLarge(err) {
+			t.Fatalf("read: %v", err)
+		}
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(strings.Repeat("a", 11)))
+	req.ContentLength = -1
+	req.Header.Del("Content-Length")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+}
+
+func TestMaxBodyBytesErrorWriter(t *testing.T) {
+	var got Failure
+	ew := func(w http.ResponseWriter, r *http.Request, f Failure) {
+		got = f
+		w.WriteHeader(f.Status)
+	}
+	h := MaxBodyBytes(4, ew)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("hello"))
+	req.Header.Set("X-Request-ID", "req-1")
+	rec := httptest.NewRecorder()
+	RequestID()(h).ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+	if got.Code != ErrorCodePayloadTooLarge {
+		t.Fatalf("code = %q, want %s", got.Code, ErrorCodePayloadTooLarge)
+	}
+	if got.RequestID != "req-1" {
+		t.Fatalf("request id = %q, want req-1", got.RequestID)
+	}
+}
+
+func TestMaxBodyBytesDoesNotOverwriteHandler(t *testing.T) {
+	h := MaxBodyBytes(4, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusTeapot)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("hello"))
+	req.ContentLength = -1
+	req.Header.Del("Content-Length")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTeapot {
+		t.Fatalf("status = %d, want 418 (handler already committed)", rec.Code)
+	}
+}
+
+func TestIsBodyTooLarge(t *testing.T) {
+	if IsBodyTooLarge(nil) || IsBodyTooLarge(io.EOF) {
+		t.Fatal("nil and EOF must not be MaxBytesError")
+	}
+	if !IsBodyTooLarge(&http.MaxBytesError{Limit: 8}) {
+		t.Fatal("MaxBytesError should match")
 	}
 }
 
