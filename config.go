@@ -89,7 +89,7 @@ func (c *Server) applyConfigFromSource() error {
 	if !ok {
 		return fmt.Errorf("cf_http: configuration source %q not found", c.configSource)
 	}
-	c.applyConfig(*cfg)
+	c.applyConfig(cfg)
 	return nil
 }
 
