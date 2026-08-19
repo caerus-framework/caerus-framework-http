@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -57,6 +58,9 @@ func TestNewDefaults(t *testing.T) {
 	}
 	if s.shutdownTimeout != 10*time.Second {
 		t.Fatalf("shutdownTimeout = %v, want 10s", s.shutdownTimeout)
+	}
+	if s.waitForHealth != 0 {
+		t.Fatalf("waitForHealth = %v, want 0 (disabled)", s.waitForHealth)
 	}
 	if s.maxHeaderBytes != 1<<20 {
 		t.Fatalf("maxHeaderBytes = %d, want %d", s.maxHeaderBytes, 1<<20)
@@ -427,6 +431,67 @@ func TestHealthWhileListening(t *testing.T) {
 	<-errCh
 	if err := s.Health(context.Background()); err == nil {
 		t.Fatal("Health after Run returns should fail")
+	}
+}
+
+type toggleHealthProvider struct {
+	name  string
+	ready atomic.Bool
+}
+
+func (p *toggleHealthProvider) Name() string                { return p.name }
+func (p *toggleHealthProvider) GetInitOrderStage() cf.Stage { return cf.Stage("app") }
+func (p *toggleHealthProvider) Init(context.Context, *cf.CaerusFramework) error {
+	return nil
+}
+func (p *toggleHealthProvider) Shutdown(context.Context) error { return nil }
+
+func (p *toggleHealthProvider) Health(ctx context.Context) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if !p.ready.Load() {
+		return errors.New("not ready")
+	}
+	return nil
+}
+
+func TestRunWaitForHealthDelaysListen(t *testing.T) {
+	p := &toggleHealthProvider{name: "dummy-health"}
+	fw := cf.New(&cf.FrameworkOptions{
+		Components: []cf.CaerusComponent{p},
+	})
+
+	s := New(
+		WithBind("127.0.0.1:0"),
+		WithWaitForHealth(2*time.Second),
+	)
+	if err := s.Init(context.Background(), fw); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
+
+	s.SetHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- s.Run(ctx) }()
+
+	// It should not start listening until the fake HealthProvider turns healthy.
+	time.Sleep(50 * time.Millisecond)
+	if s.listening.Load() {
+		t.Fatal("server listened before health providers were healthy")
+	}
+
+	p.ready.Store(true)
+	waitListening(t, s)
+
+	cancel()
+	if err := <-errCh; err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 }
 

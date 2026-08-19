@@ -123,6 +123,11 @@ the window before bind. Observability `/readyz` includes this check, so
 Kubernetes stops sending traffic until the port is claimed, and again as
 soon as drain starts (readiness fails before in-flight requests finish).
 
+`WithWaitForHealth(timeout)` further delays binding / `ListenAndServe` until
+all other framework `HealthProvider`s are healthy. It is primarily for
+non-Kubernetes runs where there is no `/readyz` gate outside the process
+itself.
+
 ## See also
 
 - `reload.md` — how live config reload interacts with listening settings
