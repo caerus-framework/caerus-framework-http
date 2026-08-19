@@ -71,6 +71,7 @@ type options struct {
 	readHeaderTimeout time.Duration
 	maxHeaderBytes    int
 	shutdownTimeout   time.Duration
+	waitForHealth     time.Duration
 	metricsEnabled    bool
 	restartPolicy     RestartPolicy
 	logger            *slog.Logger
@@ -118,6 +119,14 @@ func WithShutdownTimeout(d time.Duration) Option {
 	return func(o *options) { o.shutdownTimeout = d }
 }
 
+// WithWaitForHealth delays binding / serving until all framework
+// HealthProvider components are healthy (or the timeout elapses).
+//
+// A timeout <= 0 disables the wait.
+func WithWaitForHealth(timeout time.Duration) Option {
+	return func(o *options) { o.waitForHealth = timeout }
+}
+
 // WithMetricsEnabled enables or disables the component MetricsProvider.
 func WithMetricsEnabled(enabled bool) Option {
 	return func(o *options) { o.metricsEnabled = enabled }
@@ -159,6 +168,7 @@ type Server struct {
 	readHeaderTimeout time.Duration
 	maxHeaderBytes    int
 	shutdownTimeout   time.Duration
+	waitForHealth     time.Duration
 	metricsEnabled    bool
 	restartPolicy     RestartPolicy
 	restartRequired   atomic.Bool
@@ -213,6 +223,7 @@ func New(opts ...Option) *Server {
 		readHeaderTimeout: o.readHeaderTimeout,
 		maxHeaderBytes:    o.maxHeaderBytes,
 		shutdownTimeout:   o.shutdownTimeout,
+		waitForHealth:     o.waitForHealth,
 		metricsEnabled:    o.metricsEnabled,
 		restartPolicy:     o.restartPolicy,
 		loggerSet:         o.loggerSet,
@@ -349,6 +360,7 @@ func (c *Server) Run(ctx context.Context) error {
 	readHeaderTimeout := c.readHeaderTimeout
 	maxHeaderBytes := c.maxHeaderBytes
 	shutdownTimeout := c.shutdownTimeout
+	waitForHealth := c.waitForHealth
 
 	runCtx, runCancel := context.WithCancel(ctx)
 	c.running = true
@@ -371,6 +383,15 @@ func (c *Server) Run(ctx context.Context) error {
 	if len(binds) == 0 {
 		c.loggerValue().Error("cf_http: listen failed", "err", "bind is required")
 		return errors.New("cf_http: bind is required")
+	}
+
+	if waitForHealth > 0 {
+		if err := c.waitForHealthProviders(runCtx, waitForHealth); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
+			return err
+		}
 	}
 	lns, err := listenAll(binds)
 	if err != nil {
@@ -441,6 +462,99 @@ func (c *Server) Run(ctx context.Context) error {
 		}
 		return serveErr
 	}
+}
+
+func (c *Server) waitForHealthProviders(runCtx context.Context, timeout time.Duration) error {
+	if c.fw == nil {
+		return errors.New("cf_http: wait for health requires an initialized framework")
+	}
+	if timeout <= 0 {
+		return nil
+	}
+
+	waitCtx, cancel := context.WithTimeout(runCtx, timeout)
+	defer cancel()
+
+	type providerCheck struct {
+		name string
+		hp   cf.HealthProvider
+	}
+	var providers []providerCheck
+	for _, comp := range c.fw.Components() {
+		if comp == nil {
+			continue
+		}
+		// `cf_http.Server` implements `HealthProvider` but it would deadlock:
+		// our health is only true after we have a live listener.
+		if comp.Name() == c.Name() {
+			continue
+		}
+		if h, ok := comp.(cf.HealthProvider); ok {
+			providers = append(providers, providerCheck{name: comp.Name(), hp: h})
+		}
+	}
+	if len(providers) == 0 {
+		return nil
+	}
+
+	c.loggerValue().Info("cf_http: waiting for health providers before bind",
+		"timeout", timeout, "providers", len(providers))
+
+	const perCheckTimeout = 2 * time.Second
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+
+	var lastFailures []string
+	for {
+		lastFailures = lastFailures[:0]
+		allHealthy := true
+		for _, p := range providers {
+			checkCtx, checkCancel := context.WithTimeout(waitCtx, perCheckTimeout)
+			err := p.hp.Health(checkCtx)
+			checkCancel()
+			if err != nil {
+				allHealthy = false
+				lastFailures = append(lastFailures, p.name+": "+healthReasonForWait(err))
+			}
+		}
+
+		if allHealthy {
+			return nil
+		}
+		if waitCtx.Err() != nil {
+			if errors.Is(waitCtx.Err(), context.Canceled) {
+				return context.Canceled
+			}
+			msg := strings.Join(lastFailures, ", ")
+			if msg == "" {
+				msg = "unhealthy"
+			}
+			return errors.New("cf_http: wait for health timed out: " + msg)
+		}
+
+		select {
+		case <-waitCtx.Done():
+			if errors.Is(waitCtx.Err(), context.Canceled) {
+				return context.Canceled
+			}
+			return errors.New("cf_http: wait for health ended: " + waitCtx.Err().Error())
+		case <-ticker.C:
+		}
+	}
+}
+
+func healthReasonForWait(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "not initialized") {
+		return "not_initialized"
+	}
+	if strings.Contains(msg, "ping") {
+		return "ping_failed"
+	}
+	return "unhealthy"
 }
 
 // ErrServerRestartRequired is returned by Run when a live configuration reload
@@ -540,6 +654,9 @@ func (c *Server) validateActiveSettings() error {
 	}
 	if c.shutdownTimeout <= 0 {
 		return errors.New("cf_http: shutdown timeout must be positive")
+	}
+	if c.waitForHealth < 0 {
+		return errors.New("cf_http: wait for health timeout must not be negative")
 	}
 	switch c.restartPolicy {
 	case "", RestartPolicyHandled, RestartPolicyImmediate:

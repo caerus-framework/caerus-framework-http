@@ -84,6 +84,11 @@ when a restart-required setting changes on reload — see
 normalization belong to the Ingress, mesh, reverse proxy, or load balancer in
 front of this component.
 
+`WithWaitForHealth(timeout)` (optional) delays `ListenAndServe` until all
+framework `cf.HealthProvider` components are healthy, or the timeout elapses.
+Use it to reduce the \"port is open but data deps are not\" window in
+non-Kubernetes environments.
+
 ## Security middleware
 
 Optional `CORS`, `CSRF`, `SecurityHeaders`, and `Compression` middleware live in this module.
