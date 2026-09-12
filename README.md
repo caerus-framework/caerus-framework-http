@@ -249,7 +249,9 @@ in-process or want nosniff without waiting on Ingress.
   request ID, and **partial** `client_ip` (IPv4 `/24`, IPv6 `/48` via
   `cf_logs.ClientIP`). `RequestLogWith` sets `omit` / `full` or a getter
   for an identity the **app** already trusts. This module never reads
-  `X-Forwarded-For`. Query, body, and cookies stay off.
+  `X-Forwarded-For` by itself. Behind Caerus HAProxy→Istio, pass
+  `TrustedIngressClientIP` (`X-Envoy-External-Address`, else `RemoteAddr`).
+  Query, body, and cookies stay off.
 - **`MaxBodyBytes(n, write)`** — opt-in 413 when the request body is larger
   than `n` bytes (`n <= 0` is a no-op). Not on the Server by default: a global
   limit would break uploads and large GraphQL variables. Wrap JSON POST

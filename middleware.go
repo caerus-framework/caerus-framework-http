@@ -77,8 +77,9 @@ type RequestLogConfig struct {
 	// IP is full, partial, or omit (see cf_logs.IPMode). Empty means partial.
 	IP cf_logs.IPMode
 	// ClientIP returns the address to format. Nil means r.RemoteAddr.
-	// cf_http never reads X-Forwarded-For; pass a getter only for an
-	// identity the app already trusts.
+	// cf_http never reads X-Forwarded-For by itself; pass a getter only for
+	// an identity the app already trusts (for Caerus HAProxy→Istio, see
+	// TrustedIngressClientIP).
 	ClientIP func(*http.Request) string
 }
 
