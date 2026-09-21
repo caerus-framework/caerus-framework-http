@@ -270,21 +270,21 @@ func validateTrustedHost(h string) error {
 }
 
 // CSRFTokenFrom returns the CSRF token for this request after CSRF
-// middleware has run. On the GET that mints the cookie, the token is in
-// context (the browser has not echoed the cookie yet). Afterwards it is
-// also in the cookie. Empty when origin_only or CSRF did not run.
+// middleware has run. The token lives in request context: on the GET
+// that mints the cookie (the browser has not echoed it yet), and on a
+// successful unsafe method (so a form re-render can echo again).
+// CookieName does not matter — this helper never reads cookies. Empty
+// when origin_only or CSRF did not wrap this handler.
 func CSRFTokenFrom(r *http.Request) string {
 	if r == nil {
 		return ""
 	}
-	if v, ok := r.Context().Value(csrfTokenContextKey{}).(string); ok {
-		return v
-	}
-	c, err := r.Cookie("_csrf")
-	if err != nil {
-		return ""
-	}
-	return c.Value
+	v, _ := r.Context().Value(csrfTokenContextKey{}).(string)
+	return v
+}
+
+func withCSRFToken(r *http.Request, token string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), csrfTokenContextKey{}, token))
 }
 
 // CSRF returns middleware for cfg.Mode. Prefer CSRFConfig.Validate in Init;
@@ -292,6 +292,8 @@ func CSRFTokenFrom(r *http.Request) string {
 //
 // All modes fail closed on unsafe methods with neither Origin nor Referer.
 // synchronizer (default) and double_submit also require a matching token.
+// CSRFTokenFrom reads the token from request context; this middleware
+// stashes it on minting GET/HEAD and on a successful unsafe method.
 func CSRF(cfg CSRFConfig) Middleware {
 	if err := cfg.Validate(); err != nil {
 		panic(err)
@@ -332,8 +334,7 @@ func CSRF(cfg CSRFConfig) Middleware {
 				if cfg.ExposeTokenHeader && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 					w.Header().Set(cfg.HeaderName, token)
 				}
-				ctx := context.WithValue(r.Context(), csrfTokenContextKey{}, token)
-				r = r.WithContext(ctx)
+				r = withCSRFToken(r, token)
 				if _, err := r.Cookie(cfg.CookieName); err != nil {
 					r.AddCookie(&http.Cookie{Name: cfg.CookieName, Value: token})
 				}
@@ -364,7 +365,7 @@ func CSRF(cfg CSRFConfig) Middleware {
 				csrfWrite(w, r, cfg.Write, "CSRF_TOKEN_MISMATCH", http.StatusForbidden, "CSRF token mismatch")
 				return
 			}
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, withCSRFToken(r, cookie.Value))
 		})
 	}
 }

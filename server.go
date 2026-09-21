@@ -307,6 +307,8 @@ func (c *Server) Init(ctx context.Context, fw *cf.CaerusFramework) error {
 }
 
 // SetHandler registers the app-owned HTTP handler. It must be called before Run.
+// It does not wrap CORS, CSRF, or other security middleware — the app
+// composes those (see README CSRF: not automatic).
 func (c *Server) SetHandler(handler http.Handler) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
