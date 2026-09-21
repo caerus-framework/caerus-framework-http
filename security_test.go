@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -542,6 +543,34 @@ func TestCSRFTrustedHostsIgnoresRequestHost(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (Origin host is on the allowlist)", rec.Code)
+	}
+}
+
+func TestCSRFTrustedHostsSourceLive(t *testing.T) {
+	var allow atomic.Value
+	allow.Store([]string{"api.example.com"})
+	handler := CSRF(CSRFConfig{
+		TrustedHostsSource: func() []string {
+			return allow.Load().([]string)
+		},
+	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Host = "ignored.example"
+	req.Header.Set("Origin", "https://api.example.com")
+	req.AddCookie(&http.Cookie{Name: "_csrf", Value: "token123"})
+	req.Header.Set("X-CSRF-Token", "token123")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	allow.Store([]string{"other.example.com"})
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req)
+	if rec2.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 after allowlist change", rec2.Code)
 	}
 }
 
