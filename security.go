@@ -222,6 +222,13 @@ type CSRFConfig struct {
 	// is ignored so a client cannot spoof Host to match a fake Origin.
 	TrustedHosts []string
 
+	// TrustedHostsSource, when set, is called on every unsafe request to
+	// obtain the allowlist. It takes precedence over TrustedHosts. Use it
+	// for live lists (e.g. Auth hosts loaded from a database). Returning
+	// nil or empty falls back to comparing Origin to r.Host (same as an
+	// empty TrustedHosts). Validate does not call this function.
+	TrustedHostsSource func() []string
+
 	// ExposeTokenHeader, when true, copies the token into HeaderName on
 	// GET and HEAD responses (not OPTIONS). Default false. Use it so a
 	// same-origin SPA can read response.headers instead of echoing via
@@ -334,7 +341,7 @@ func CSRF(cfg CSRFConfig) Middleware {
 				return
 			}
 
-			if !validateOrigin(r, secure, cfg.TrustedHosts) {
+			if !validateOrigin(r, secure, csrfTrustedHosts(cfg)) {
 				csrfWrite(w, r, cfg.Write, "CSRF_ORIGIN_VALIDATION_FAILED", http.StatusForbidden, "CSRF origin validation failed")
 				return
 			}
@@ -426,6 +433,14 @@ func generateCSRFToken(length int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(bytes), nil
+}
+
+// csrfTrustedHosts returns the live allowlist for this request.
+func csrfTrustedHosts(cfg CSRFConfig) []string {
+	if cfg.TrustedHostsSource != nil {
+		return cfg.TrustedHostsSource()
+	}
+	return cfg.TrustedHosts
 }
 
 // validateOrigin validates the Origin or Referer header to prevent cross-origin requests.
