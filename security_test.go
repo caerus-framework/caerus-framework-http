@@ -432,6 +432,79 @@ func TestCSRFTokenFromOnMintingGET(t *testing.T) {
 	}
 }
 
+func TestCSRFTokenFromCustomCookieName(t *testing.T) {
+	var got string
+	handler := CSRF(CSRFConfig{CookieName: "csrf"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = CSRFTokenFrom(r)
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	var cookieVal string
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "csrf" {
+			cookieVal = c.Value
+			break
+		}
+	}
+	if cookieVal == "" {
+		t.Fatal("cookie csrf should be set")
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "_csrf" {
+			t.Fatal("must not set default _csrf when CookieName is csrf")
+		}
+	}
+	if got != cookieVal {
+		t.Fatalf("CSRFTokenFrom = %q, want cookie %q", got, cookieVal)
+	}
+}
+
+func TestCSRFTokenFromOnSuccessfulPOST(t *testing.T) {
+	const name = "csrf"
+	const token = "token123"
+	var got string
+	handler := CSRF(CSRFConfig{CookieName: name})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = CSRFTokenFrom(r)
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.AddCookie(&http.Cookie{Name: name, Value: token})
+	req.Header.Set("X-CSRF-Token", token)
+	req.Header.Set("Origin", "https://"+req.Host)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got != token {
+		t.Fatalf("CSRFTokenFrom = %q, want %q", got, token)
+	}
+}
+
+func TestCSRFTokenFromEmptyWithoutMiddleware(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: "_csrf", Value: "present"})
+	if got := CSRFTokenFrom(req); got != "" {
+		t.Fatalf("CSRFTokenFrom = %q, want empty when CSRF did not run", got)
+	}
+}
+
+func TestCSRFTokenFromOriginOnlyEmpty(t *testing.T) {
+	var got string
+	handler := CSRF(CSRFConfig{Mode: CSRFOriginOnly})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = CSRFTokenFrom(r)
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if got != "" {
+		t.Fatalf("CSRFTokenFrom = %q, want empty in origin_only", got)
+	}
+}
+
 func TestCSRFExposeTokenHeader(t *testing.T) {
 	handler := CSRF(CSRFConfig{ExposeTokenHeader: true})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

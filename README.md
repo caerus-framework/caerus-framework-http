@@ -51,6 +51,8 @@ func (a *API) Init(ctx context.Context, fw *cf.CaerusFramework) error {
 
     mux := http.NewServeMux()
     registerRoutes(mux)
+    // SetHandler does not wrap CSRF/CORS. Cookie-session apps wrap the
+    // mutation mux themselves (see CSRF below). demoapp skips CSRF.
     handler := cf_http.Chain(
         cf_http.Metrics(server),
         cf_http.RequestID(),
@@ -80,9 +82,18 @@ The source uses the `HTTP_` environment prefix and the `--http` file-path flag.
 Bind and server timeouts are restart-required; metrics enablement reloads
 live. `restart_policy` (`handled` default, or `immediate`) selects what happens
 when a restart-required setting changes on reload — see
-[`docs/reload.md`](docs/reload.md). TLS, PROXY protocol, and forwarded-header
-normalization belong to the Ingress, mesh, reverse proxy, or load balancer in
-front of this component.
+[`docs/reload.md`](docs/reload.md).
+
+**TLS Path A (recommended K8s):** mesh or Ingress terminates TLS. This
+component stays HTTP on the pod network (`bind`, often `:8080`). PROXY
+protocol and forwarded-header trust are the **edge's** job — this module
+does not parse `X-Forwarded-For` unless the app passes a getter (see
+`RequestLog` / ClientIP).
+
+**TLS Path B (not built):** in-process `ListenAndServeTLS` (`tls_cert_file` /
+`tls_key_file` on this server) does not exist yet. Until it does: do not
+expose this bind past the mesh. A cloud VM with no mesh is not HTTPS
+because you used `caerus-framework-http`.
 
 `WithWaitForHealth(timeout)` (optional) delays `ListenAndServe` until all
 framework `cf.HealthProvider` components are healthy, or the timeout elapses.
@@ -129,12 +140,23 @@ cf_http.CORS(cf_http.CORSConfig{
 })
 ```
 
-### CSRF: pick one mode
+### CSRF: not automatic, then pick one mode
 
-`CSRF(cfg)` is **opt-in**. Cookie-session apps need it; `Authorization: Bearer`
-APIs usually do not (the browser will not attach that header by itself).
+`SetHandler` does **not** wrap CSRF. `CSRF(cfg)` is middleware the **app**
+puts on the mux it then registers. Cookie-session apps (HttpOnly session
+cookie, browser POSTs) **must** wrap the mutation mux — auth-api is the
+pattern. `Authorization: Bearer` APIs usually skip it (the browser will not
+attach that header by itself). demoapp skips it (no session cookie). Never
+wrap a CDN-cached public GET (`ExposeTokenHeader` is a secret).
 
-**Mode owns the whole product.** Empty `Mode` is `synchronizer`. Do not set
+```text
+Wrong: assume SetHandler or Chain() already applied CSRF because this
+       module ships CSRF().
+Right: cookie-session apps wrap the mutation mux themselves (auth-api).
+       Apps with no session cookie skip CSRF (demoapp).
+```
+
+Then pick **one mode**. Empty `Mode` is `synchronizer`. Do not set
 HttpOnly yourself — there is no HttpOnly field.
 
 | `Mode` | Who it is for | Cookie | Unsafe POST must also send |
@@ -184,8 +206,10 @@ Right: TrustedHosts: []string{"api.example.com"} when nothing rewrites Host.
 is app echo only):
 
 **App echo (`CSRFTokenFrom`)** — always available in `synchronizer` /
-`double_submit`. On the GET that mints the cookie, the handler can read the
-token (context, not `document.cookie`) and put it in HTML or JSON:
+`double_submit`. The helper reads **request context only** (never the
+cookie, so `CookieName` does not matter). Middleware stashes the token on
+the GET that mints the cookie and on a successful unsafe method (form
+re-render). Empty means origin_only or CSRF did not wrap that handler:
 
 ```go
 mux.HandleFunc("/form", func(w http.ResponseWriter, r *http.Request) {
@@ -231,8 +255,10 @@ cf_http.SecurityHeaders(cf_http.SecurityHeadersConfig{
 })
 ```
 
-The edge can still send these. This helper is for apps that terminate TLS
-in-process or want nosniff without waiting on Ingress.
+The edge can still send these. Prefer TLS Path A (mesh/Ingress HTTPS) and
+use this helper for nosniff without waiting on Ingress, or for HSTS when
+the browser already sees HTTPS. In-process TLS on this server is not built
+(TLS Path B).
 
 ### Compression
 

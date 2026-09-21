@@ -113,6 +113,11 @@ srv.SetHandler(mux)
   overridden with `WithSourceEnvPrefix`; `--<name>` overrides the config file
   path; `--http-*` flags overlay individual settings at process start.
 - `WithName` gives multiple named instances; resolve peers with `GetByName`.
+- **TLS Path A:** this listener is plaintext HTTP. Mesh or Ingress
+  terminates TLS. In-process TLS (Path B) is not built — do not expose
+  `bind` past the mesh.
+- `SetHandler` does **not** wrap CSRF. Cookie-session apps compose
+  `CSRF(cfg)` on the mutation mux themselves.
 
 ## Health and readiness
 
